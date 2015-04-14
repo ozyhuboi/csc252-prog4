@@ -45,7 +45,7 @@ team_t team = {
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
 // Inspired by 252 Perspective pg. 830
-#define MAX(x, y) ((x) > (y)? (x) : (y))
+#define MAX(x, y) ((x) > (y)? (x) : (y) )
 
 /* Pack a size and allocated bit into a word */
 #define PACK(size, alloc) ((size) | (alloc))
@@ -62,7 +62,7 @@ team_t team = {
 #define HDRP(bp) ((char *)(bp) - 4)
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - 8)
 
-/* Given block ptr bp, computer address of next and previous blocks */
+/* Given block ptr bp, compute address of next and previous blocks, these connect the list */
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - 4)))
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - 8)))
 
@@ -76,7 +76,9 @@ int mm_init(void) {
 
 	/* Create the intial heap*/
 
-	if ((heap_listp = mem_sbrk(16)) == (void*)-1) return -1;
+	if ((heap_listp = mem_sbrk(ALIGNMENT)) == (void*) - 1) {
+		return -1;
+	}
 
 	PUT(heap_listp, 0); // Alignment padding
 	PUT(heap_listp + 4, PACK(8, 1));//Prologue header
@@ -84,6 +86,10 @@ int mm_init(void) {
 	PUT(heap_listp + 12, PACK(0, 1));	//Epilogue header
 	heap_listp += 8;
 
+
+	if (extend_heap(CHUNK/4) == NULL) {
+		return -1; // Extend empty heap with CHUNK bytes
+	}
 
     return 0;
 }
@@ -97,19 +103,30 @@ int mm_init(void) {
 void *mm_malloc(size_t size) {
 
     int newsize = ALIGN(size + SIZE_T_SIZE);
+    //void *p = mem_sbrk(newsize);
+    int extend;
+    void *p;
 
-
-    //Ignore malloc of 0
-    if (size == 0) return NULL;
-
-    /* Adjust block size to include overhead and alignment requirements */
-
-    if (p == (void *)-1) {
-	    return NULL;
-    } else {
-        *(size_t *)p = size;
-        return (void *)((char *)p + SIZE_T_SIZE);
+    //Ignore sizes of 0
+    if (size == 0) {
+    	return NULL;
     }
+
+    /* Search free list for a fit*/
+    if ((p = find_fit(newsize)) != NULL) {
+
+    	place(p, newsize );
+    	return p;
+    }
+
+    /* If no fit found, get more memory and place block */
+    extend = MAX(newsize, CHUNK);
+    if ((p = extend_heap(extend/4)) == NULL) {
+    	return NULL; // If can't extend, then don't
+    }
+
+    place(p, newsize);
+    return p;
 }
 
 /*
@@ -120,9 +137,12 @@ void mm_free(void *ptr) {
 
 	size_t size = GET_SIZE( HDRP(ptr) );
 
-	//PUT(HDRP(ptr), PACK(size, 0));
-	//PUT(FTRP(ptr), PACK(size, 0));
-	//coalesce(bp);
+	if (heap_listp == 0) {
+		mm_init();
+	}
+	PUT(HDRP(ptr), PACK(size, 0));
+	PUT(FTRP(ptr), PACK(size, 0));
+	coalesce(ptr);
 
 }
 
@@ -160,4 +180,97 @@ int mm_check (void) {
 
 
 	return 1; // All checks pass
+}
+
+/*
+ * Other helper functions used above.
+ */
+
+/*
+ * Increase the size of the heap when called
+ */
+static void *extend_heap(size_t word) {
+	char *bp;
+	size_t size;
+
+	size = (word % 2) ? (word+1) * 4 : word * 4;
+	if ((long)(bp = mem_sbrk(size)) == -1) return NULL;
+
+	PUT(HDRP(bp), PACK(size, 0));
+	PUT(FTRP(bp), PACK(size, 0));
+	PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
+}
+
+/*
+ * Search for blocks of right size to place into, then return pointer to location
+ */
+
+static void *find_fit(size_t asize) {
+	void *p
+
+	for (p = heap_listp; GET_SIZE(HDRP(p)) > 0; p = NEXT_BLKP(p)) {
+		if (!GET_ALLOC(HDRP(p)) && (asize <= GET_SIZE(HDRP(p)))) {
+			return p;
+		}
+	}
+}
+
+/*
+ * Place newly allocated block
+ */
+
+static void place(9void *bp, size_t asize) {
+	size_t csize = GET_SIZE(HDRP(bp));
+
+	if ((csize - asize) >= (16)) {
+
+		PUT(HDRP(bp), PACK(asize, 1));
+		PUT(FTRP(bp), PACK(asize, 1));
+		bp = NEXT_BLKP(bp);
+		PUT(HDRP(bp), PACK(csize - asize, 0));
+		PUT(FTRP(bp), PACK(csize - asize, 0));
+
+	} else {
+		PUT(HDRP(bp), PACK(csize, 1));
+		PUT(FTRP(bp), PACK(csize, 1));
+	}
+}
+
+/*
+ * Coalesce the free blocks to be large enough for newly allocated memory
+ */
+
+static void *coalesce(void *bp) {
+
+	size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
+	size_t next_alloc = GET_ALLOC(FTRP(NEXT_BLKP(bp)));
+	size_t seize = GET_ALLOC(HDRP(bp));
+
+	// Case 1
+	if (prev_alloc && next_alloc ) {
+		return bp;
+	} else {
+		// Case 2
+		if (prev_alloc && !next_alloc) {
+			size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+			PUT(HDRP(bp), PACK(size, 0));
+			PUT(FTRP(bp), PACK(size, 0));
+		} else {
+			// Case 3
+			if (!prev_alloc && next_alloc) {
+				size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+				PUT(FTRP(bp), PACK(size, 0));
+				PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+				bp = PREV_BLKP(bp);
+			} else {
+				// Case 4
+				size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXST_BLKP(bp)));
+				PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
+				PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
+				bp = PREV_BLKP(bp);
+			}
+
+		}
+		return bp;
+	}
 }
