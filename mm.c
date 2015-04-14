@@ -37,7 +37,6 @@ team_t team = {
 
 /* 16 byte alignment */
 #define ALIGNMENT 16
-#define CHUNK (1<<12)
 
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT) - 1) & ~(ALIGNMENT- 1))
@@ -68,6 +67,11 @@ team_t team = {
 
 static char *heap_listp = 0; // Pointer to first block
 
+/* Prototypes for the helper functions at the bottom */
+static void *extend_heap(size_t word);
+static void *find_fit(size_t asize);
+static void place(void *bp, size_t size);
+static void *coalesce(void *bp);
 /* 
  * mm_init - initialize the malloc package.
  * Inspired by 252 Perspective pg. 831
@@ -76,20 +80,20 @@ int mm_init(void) {
 
 	/* Create the intial heap*/
 
-	if ((heap_listp = mem_sbrk(ALIGNMENT)) == (void*) - 1) {
+	if ((heap_listp = mem_sbrk(ALIGNMENT)) == (void*)-1) {
 		return -1;
 	}
 
-	PUT(heap_listp, 0); // Alignment padding
-	PUT(heap_listp + 4, PACK(8, 1));//Prologue header
-	PUT(heap_listp + 8, PACK(8, 1)); 	//Prologue footer
-	PUT(heap_listp + 12, PACK(0, 1));	//Epilogue header
-	heap_listp += 8;
+	//PUT(heap_listp, 0); // Alignment padding
+	//PUT(heap_listp + 4, PACK(8, 1));//Prologue header
+	//PUT(heap_listp + 8, PACK(8, 1)); 	//Prologue footer
+	//PUT(heap_listp + 12, PACK(0, 1));	//Epilogue header
+	//heap_listp += 8;
 
 
-	if (extend_heap(CHUNK/4) == NULL) {
-		return -1; // Extend empty heap with CHUNK bytes
-	}
+	//if (extend_heap(CHUNK/4) == NULL) {
+		//return -1; // Extend empty heap with CHUNK bytes
+	//}
 
     return 0;
 }
@@ -101,6 +105,8 @@ int mm_init(void) {
  *     Inspired by 252 Perspective pg. 834
  */
 void *mm_malloc(size_t size) {
+
+	printf("%s", "MOTHERFUCKIN' MALLOC\n" );
 
     int newsize = ALIGN(size + SIZE_T_SIZE);
     //void *p = mem_sbrk(newsize);
@@ -120,26 +126,38 @@ void *mm_malloc(size_t size) {
     }
 
     /* If no fit found, get more memory and place block */
+    /*
     extend = MAX(newsize, CHUNK);
     if ((p = extend_heap(extend/4)) == NULL) {
     	return NULL; // If can't extend, then don't
     }
-
+	*/
+    /*
+    	    if (p == (void *)-1) {
+    		    return NULL;
+    	    } else {
+    	        *(size_t *)p = size;
+    	        return (void *)((char *)p + SIZE_T_SIZE);
+    	    }
+    */
     place(p, newsize);
     return p;
 }
 
 /*
- * mm_free - Freeing a block does nothing.
+ * mm_free - Freeing a block sets the pointers at the header and footer to 0
  * Inspired by 252 Perspective pg. 833
  */
 void mm_free(void *ptr) {
+
+	printf("%s", "MOTHERFUCKIN' FREE\n");
 
 	size_t size = GET_SIZE( HDRP(ptr) );
 
 	if (heap_listp == 0) {
 		mm_init();
 	}
+
 	PUT(HDRP(ptr), PACK(size, 0));
 	PUT(FTRP(ptr), PACK(size, 0));
 	coalesce(ptr);
@@ -150,6 +168,9 @@ void mm_free(void *ptr) {
  * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
  */
 void *mm_realloc(void *ptr, size_t size) {
+
+	printf("%s", "MOTHERFUCKIN' REALLOC\n");
+
     void *oldptr = ptr;
     void *newptr;
     size_t copySize;
@@ -194,35 +215,52 @@ static void *extend_heap(size_t word) {
 	size_t size;
 
 	size = (word % 2) ? (word+1) * 4 : word * 4;
-	if ((long)(bp = mem_sbrk(size)) == -1) return NULL;
+
+	/* If heap can't be extended */
+	if ((long)(bp = mem_sbrk(size)) == -1) {
+		return NULL;
+	}
 
 	PUT(HDRP(bp), PACK(size, 0));
 	PUT(FTRP(bp), PACK(size, 0));
 	PUT(HDRP(NEXT_BLKP(bp)), PACK(0, 1));
+
 }
 
 /*
  * Search for blocks of right size to place into, then return pointer to location
+ * This is fucking up somewhere, causing the leading payload pointer to be outside the heap
  */
 
 static void *find_fit(size_t asize) {
-	void *p
+	void *p;
 
+
+	printf("%s", "MOTHERFUCKING FIND\n");
 	for (p = heap_listp; GET_SIZE(HDRP(p)) > 0; p = NEXT_BLKP(p)) {
+		printf("1. Pointer: (%p) for size: (%d)\n", p, asize);
 		if (!GET_ALLOC(HDRP(p)) && (asize <= GET_SIZE(HDRP(p)))) {
+			printf("Pointer: (%p) for size: (%d)\n", p, asize);
 			return p;
 		}
 	}
+
 }
 
 /*
  * Place newly allocated block
  */
 
-static void place(9void *bp, size_t asize) {
+static void place(void *bp, size_t asize) {
+
+	printf("%s", "MOTHERFUCKIN' PLACE\n" );
+
+	printf("2. Pointer: (%p) for size: (%d)\n", bp, asize);
 	size_t csize = GET_SIZE(HDRP(bp));
 
-	if ((csize - asize) >= (16)) {
+	/*  If the block is too large, we can split it */
+	/*
+	if ((csize - asize) >= (ALIGNMENT)) {
 
 		PUT(HDRP(bp), PACK(asize, 1));
 		PUT(FTRP(bp), PACK(asize, 1));
@@ -230,10 +268,13 @@ static void place(9void *bp, size_t asize) {
 		PUT(HDRP(bp), PACK(csize - asize, 0));
 		PUT(FTRP(bp), PACK(csize - asize, 0));
 
-	} else {
+	} else { */
+
 		PUT(HDRP(bp), PACK(csize, 1));
 		PUT(FTRP(bp), PACK(csize, 1));
-	}
+		//printf("%s", "MOTHERFUCKIN' PLACED\n" );
+
+	//}
 }
 
 /*
@@ -244,7 +285,7 @@ static void *coalesce(void *bp) {
 
 	size_t prev_alloc = GET_ALLOC(FTRP(PREV_BLKP(bp)));
 	size_t next_alloc = GET_ALLOC(FTRP(NEXT_BLKP(bp)));
-	size_t seize = GET_ALLOC(HDRP(bp));
+	size_t size = GET_ALLOC(HDRP(bp));
 
 	// Case 1
 	if (prev_alloc && next_alloc ) {
@@ -264,7 +305,7 @@ static void *coalesce(void *bp) {
 				bp = PREV_BLKP(bp);
 			} else {
 				// Case 4
-				size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXST_BLKP(bp)));
+				size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp)));
 				PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0));
 				PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0));
 				bp = PREV_BLKP(bp);
